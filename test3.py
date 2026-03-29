@@ -3,7 +3,7 @@ import random
 import pandas as pd
 
 # Excelファイルのパス
-file_path = r"C:\Users\user\Desktop\英検準一級対策\単語一覧.xlsx"
+file_path = "単語一覧.xlsx"
 
 # セッションステート初期化
 if 'score' not in st.session_state:
