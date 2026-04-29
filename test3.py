@@ -2,121 +2,161 @@ import streamlit as st
 import random
 import pandas as pd
 
-# Excelファイルのパス（リポジトリ内に置く）
+# -------------------------
+# 設定・初期化
+# -------------------------
+# ウェブアプリ版のパス（リポジトリ内のファイル名）
 file_path = "単語一覧.xlsx"
-
-# セッションステート初期化
-if 'score' not in st.session_state:
-    st.session_state.score = 0
-if 'count' not in st.session_state:
-    st.session_state.count = 0
-if 'finished' not in st.session_state:
-    st.session_state.finished = False
-if 'question' not in st.session_state:
-    st.session_state.question = None
-if 'answer' not in st.session_state:
-    st.session_state.answer = None
-if 'show_result' not in st.session_state:
-    st.session_state.show_result = False
-if 'selected_sheet' not in st.session_state:
-    st.session_state.selected_sheet = None
-if 'eiken_words' not in st.session_state:
-    st.session_state.eiken_words = []
-
 TOTAL_QUESTIONS = 10
 
-st.title("英検準一級 単語テスト（4択）")
+def init_session():
+    defaults = {
+        "score": 0,
+        "count": 0,
+        "finished": False,
+        "question": None,
+        "answer": None,
+        "show_result": False,
+        "selected_sheet": None,
+        "eiken_words": [],
+        "remaining_words": [],
+        "wrong_words": [],
+        "mode": "normal", # "normal" or "review"
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
 
-# Excelファイルからシート一覧取得
+def generate_question():
+    if st.session_state.mode == "normal" and st.session_state.count >= TOTAL_QUESTIONS:
+        return None
+    if not st.session_state.remaining_words:
+        return None
+
+    word, correct_meaning = st.session_state.remaining_words.pop()
+
+    all_meanings = [m for w, m in st.session_state.eiken_words if m != correct_meaning]
+    choices = random.sample(list(set(all_meanings)), min(3, len(set(all_meanings))))
+    choices.append(correct_meaning)
+    random.shuffle(choices)
+
+    return word, correct_meaning, choices
+
+def reset_quiz():
+    st.session_state.show_result = False
+    st.session_state.finished = False
+    st.session_state.score = 0
+    st.session_state.count = 0
+    
+    if st.session_state.mode == "normal":
+        sample_size = min(len(st.session_state.eiken_words), TOTAL_QUESTIONS)
+        st.session_state.remaining_words = random.sample(st.session_state.eiken_words, sample_size)
+        st.session_state.wrong_words = []
+    
+    elif st.session_state.mode == "review":
+        st.session_state.remaining_words = st.session_state.wrong_words.copy()
+        st.session_state.wrong_words = []
+        random.shuffle(st.session_state.remaining_words)
+
+    st.session_state.question = generate_question()
+
+# --- アプリメイン処理 ---
+init_session()
+st.title("🎮 英検準一級 単語テスト")
+
+# Excel読み込み
 try:
     xl = pd.ExcelFile(file_path)
     sheets = xl.sheet_names
-    sheet = st.selectbox("シートを選択してください", sheets)
+    # 「全範囲」の選択肢を追加
+    sheet = st.selectbox("出題範囲を選択してください", ["全範囲"] + sheets)
 
     if st.session_state.selected_sheet != sheet:
         st.session_state.selected_sheet = sheet
-        df = pd.read_excel(file_path, sheet_name=sheet)
-        if '単語' not in df.columns or '意味' not in df.columns:
-            st.error("選択したシートに「単語」または「意味」列が見つかりません。")
-            st.stop()
-        st.session_state.eiken_words = list(zip(df['単語'], df['意味']))
-        st.session_state.question = None
-        st.session_state.count = 0
-        st.session_state.score = 0
-        st.session_state.finished = False
+        words = []
+        if sheet == "全範囲":
+            for s in sheets:
+                df = pd.read_excel(file_path, sheet_name=s)
+                if '単語' in df.columns and '意味' in df.columns:
+                    words.extend(list(zip(df['単語'], df['意味'])))
+        else:
+            df = pd.read_excel(file_path, sheet_name=sheet)
+            words = list(zip(df['単語'], df['意味']))
+        
+        # 重複削除してセット
+        st.session_state.eiken_words = list(set(words))
+        st.session_state.mode = "normal"
+        reset_quiz()
 except Exception as e:
-    st.error(f"ファイル読み込みエラー: {e}")
+    st.error(f"Excelファイルの読み込みに失敗しました。ファイル名が「単語一覧.xlsx」であること、列名が「単語」と「意味」であることを確認してください。 エラー: {e}")
     st.stop()
 
-eiken_words = st.session_state.eiken_words
+# -------------------------
+# 画面表示ロジック
+# -------------------------
 
-def generate_question():
-    if not eiken_words:
-        return None
-    correct_word = random.choice(eiken_words)
-    correct_meaning = correct_word[1]
-    incorrect_meanings = [m for w, m in eiken_words if m != correct_meaning]
-    sample_size = min(len(set(incorrect_meanings)), 3)
-    choices = random.sample(list(set(incorrect_meanings)), sample_size)
-    choices.append(correct_meaning)
-    random.shuffle(choices)
-    return correct_word[0], correct_meaning, choices
-
-def start_new_quiz():
-    st.session_state.score = 0
-    st.session_state.count = 0
-    st.session_state.finished = False
-    st.session_state.show_result = False
-    st.session_state.answer = None
-    st.session_state.question = generate_question()
-
-# 最初の問題生成
-if st.session_state.question is None and eiken_words:
-    start_new_quiz()
-
-# テスト終了画面
+# 終了画面
 if st.session_state.finished:
-    st.subheader("✅ テスト終了！")
-    st.write(f"あなたのスコア: **{st.session_state.score} / {TOTAL_QUESTIONS}**")
-    accuracy = st.session_state.score / TOTAL_QUESTIONS * 100
-    st.write(f"正解率: **{accuracy:.1f}%**")
-    if st.session_state.score == TOTAL_QUESTIONS:
-        st.success("🌟 天才！全問正解です！おめでとう！")
-    elif accuracy >= 80:
-        st.success("🎉 合格です！よくできました！")
+    if st.session_state.mode == "review" and not st.session_state.wrong_words:
+        st.balloons()
+        st.success("💯 このセットは完璧です！素晴らしい！")
+        if st.button("次の10問へ（通常モード）"):
+            st.session_state.mode = "normal"
+            reset_quiz()
+            st.rerun()
     else:
-        st.error("残念、不合格です。もっとがんばりましょう！")
-    if st.button("もう一度チャレンジする"):
-        start_new_quiz()
-        st.rerun()
-    if st.button("終了する"):
-        st.write("お疲れ様でした！またチャレンジしてね！")
-        st.stop()
+        st.subheader("✅ テスト終了")
+        if st.session_state.wrong_words:
+            st.warning(f"あと {len(st.session_state.wrong_words)} 問の復習が必要です。")
+            if st.button("🔥 間違えた問題だけを復習する"):
+                st.session_state.mode = "review"
+                reset_quiz()
+                st.rerun()
+        else:
+            st.success("🎉 全問正解！")
+            if st.button("もう一度（新しい10問）"):
+                st.session_state.mode = "normal"
+                reset_quiz()
+                st.rerun()
 
-# テスト中
-elif st.session_state.count < TOTAL_QUESTIONS and st.session_state.question:
+# 問題表示
+elif st.session_state.question:
     word, correct_meaning, choices = st.session_state.question
-    st.write(f"### 問題 {st.session_state.count + 1} / {TOTAL_QUESTIONS}")
-    st.write(f"次の単語の意味はどれ？ → <span style='font-size:36px; font-weight:bold;'>{word}</span>", unsafe_allow_html=True)
-    st.session_state.answer = st.radio("意味を選んでください", choices, key=f"q_{st.session_state.count}")
+    
+    if st.session_state.mode == "normal":
+        st.write(f"### 通常モード: {st.session_state.count + 1} / {TOTAL_QUESTIONS}")
+    else:
+        st.write(f"### 復習モード 🔁 残り: {len(st.session_state.remaining_words) + 1}問")
+
+    # 単語を大きく表示
+    st.markdown(f"次の単語の意味は？  \n<p style='font-size:40px; font-weight:bold; color:#1E88E5;'>{word}</p>", unsafe_allow_html=True)
+    
+    ans = st.radio("選択肢:", choices, key=f"radio_{st.session_state.count}_{len(st.session_state.remaining_words)}")
 
     if st.session_state.show_result:
-        if st.session_state.answer == correct_meaning:
-            st.success("正解！🎉")
+        if ans == correct_meaning:
+            st.success("正解！✨")
         else:
-            st.error(f"不正解... 正しい意味は「{correct_meaning}」です。")
-        st.write(f"現在のスコア: {st.session_state.score} / {TOTAL_QUESTIONS}")
-        if st.button("次の問題へ"):
+            st.error(f"不正解... 正解は「 {correct_meaning} 」")
+            if (word, correct_meaning) not in st.session_state.wrong_words:
+                st.session_state.wrong_words.append((word, correct_meaning))
+
+        # Weblioボタン
+        weblio_url = f"https://ejje.weblio.jp/content/{word}"
+        st.link_button(f"📖 「{word}」の意味を詳しく確認する", weblio_url)
+
+        if st.button("次へ"):
+            if ans == correct_meaning:
+                st.session_state.score += 1
             st.session_state.count += 1
             st.session_state.show_result = False
-            if st.session_state.count < TOTAL_QUESTIONS:
-                st.session_state.question = generate_question()
+            next_q = generate_question()
+            if next_q:
+                st.session_state.question = next_q
             else:
                 st.session_state.finished = True
             st.rerun()
     else:
-        if st.button("回答を確認"):
-            if st.session_state.answer == correct_meaning:
-                st.session_state.score += 1
+        if st.button("回答を送信"):
             st.session_state.show_result = True
             st.rerun()
